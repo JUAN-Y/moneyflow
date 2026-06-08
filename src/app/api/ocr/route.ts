@@ -66,31 +66,29 @@ export async function POST(req: NextRequest) {
       else if (name.endsWith('.webp')) mediaType = 'image/webp'
     }
 
-    let messageContent: Parameters<typeof generateText>[0]['messages'][0]['content']
+    let userMessage: string | Array<{ type: 'file'; data: string; mediaType: string } | { type: 'text'; text: string }>
 
     if (mediaType === 'application/pdf') {
       const pdfText = extractTextFromPdfBuffer(buffer)
       if (pdfText.trim().length > 100) {
-        // Use text API — much higher free tier limits
-        messageContent = `${prompt}\n\nTEXTO DEL ESTADO DE CUENTA:\n${pdfText.substring(0, 20000)}`
+        userMessage = `${prompt}\n\nTEXTO DEL ESTADO DE CUENTA:\n${pdfText.substring(0, 20000)}`
       } else {
-        // Scanned PDF — fall back to vision
-        messageContent = [
+        userMessage = [
           { type: 'file' as const, data: buffer.toString('base64'), mediaType: 'application/pdf' },
           { type: 'text' as const, text: prompt },
         ]
       }
     } else {
-      // Image file — use vision
-      messageContent = [
-        { type: 'file' as const, data: buffer.toString('base64'), mediaType: mediaType },
+      userMessage = [
+        { type: 'file' as const, data: buffer.toString('base64'), mediaType },
         { type: 'text' as const, text: prompt },
       ]
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { text } = await generateText({
       model: google('gemini-2.0-flash'),
-      messages: [{ role: 'user', content: messageContent }],
+      messages: [{ role: 'user', content: userMessage as any }],
     })
 
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
