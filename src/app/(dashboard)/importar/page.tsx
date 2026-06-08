@@ -68,13 +68,14 @@ export default function ImportarPage() {
             // Rate limit hit — wait 65s on client side then retry
             const retryTime = Date.now() + 65000
             setRetryAt(retryTime)
-            updateQueue(i, { status: 'waiting', message: 'Límite de API alcanzado, reintentando automáticamente...' })
+            updateQueue(i, { status: 'waiting', message: `API: ${data.error || 'Límite alcanzado'} — reintentando...` })
             await new Promise(r => setTimeout(r, 65000))
             setRetryAt(0)
             updateQueue(i, { status: 'processing', message: undefined })
           } else {
-            updateQueue(i, { status: 'error', message: data.error || 'Sin transacciones detectadas' })
-            errs.push(`${files[i].name}: ${data.error || 'Sin transacciones'}`)
+            const errMsg = data.error || `HTTP ${res.status}: Sin transacciones detectadas`
+            updateQueue(i, { status: 'error', message: errMsg })
+            errs.push(`${files[i].name}: ${errMsg}`)
             break
           }
         } catch {
