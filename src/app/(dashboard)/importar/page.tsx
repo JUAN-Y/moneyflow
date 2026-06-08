@@ -17,11 +17,13 @@ export default function ImportarPage() {
   const supabase = createClient()
 
   const [progress, setProgress] = useState({ current: 0, total: 0 })
+  const [errors, setErrors] = useState<string[]>([])
 
   async function processFiles(files: File[]) {
-    setLoading(true); setOcrResults([]); setSaved(false)
+    setLoading(true); setOcrResults([]); setSaved(false); setErrors([])
     setProgress({ current: 0, total: files.length })
     const allTx: OcrTx[] = []
+    const errs: string[] = []
     for (let i = 0; i < files.length; i++) {
       setProgress({ current: i + 1, total: files.length })
       const form = new FormData(); form.append('file', files[i])
@@ -29,10 +31,14 @@ export default function ImportarPage() {
         const res = await fetch('/api/ocr', { method: 'POST', body: form })
         const data = await res.json()
         if (data.transactions) allTx.push(...data.transactions)
-      } catch { /* skip failed file */ }
+        else errs.push(`${files[i].name}: ${data.error || 'Sin transacciones'}`)
+      } catch (e) {
+        errs.push(`${files[i].name}: Error de conexión`)
+      }
     }
     setOcrResults(allTx)
     setEditedResults(allTx)
+    setErrors(errs)
     setLoading(false)
   }
 
@@ -96,6 +102,13 @@ export default function ImportarPage() {
             <p className="text-slate-400 text-sm mt-1">Archivo {progress.current} de {progress.total}</p>
           )}
           <p className="text-slate-500 text-sm mt-1">Esto puede tomar unos segundos por archivo</p>
+        </div>
+      )}
+
+      {errors.length > 0 && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-4 space-y-1">
+          <p className="text-red-400 font-medium text-sm">Errores en {errors.length} archivo(s):</p>
+          {errors.map((e, i) => <p key={i} className="text-red-400/70 text-xs">{e}</p>)}
         </div>
       )}
 
