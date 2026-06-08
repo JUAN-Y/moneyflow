@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Upload, FileText, Image, Plus, Check, X, Clock } from 'lucide-react'
+import { Upload, FileText, Image, Plus, Check, X, Clock, List, Layers } from 'lucide-react'
 
 const CATEGORIES = ['Comida', 'Transporte', 'Entretenimiento', 'Salud', 'Ropa', 'Educación', 'Servicios', 'Salario', 'Otros']
 
@@ -34,8 +34,31 @@ export default function ImportarPage() {
   const [editedResults, setEditedResults] = useState<OcrTx[]>([])
   const [errors, setErrors] = useState<string[]>([])
   const [retryAt, setRetryAt] = useState(0)
+  const [viewMode, setViewMode] = useState<'grouped' | 'list'>('grouped')
   const supabase = createClient()
   const countdown = useCountdown(retryAt)
+
+  // Build groups: merchant → { category, indices[] }
+  type Group = { merchant: string; category: string; count: number; totalExpense: number; totalIncome: number; indices: number[] }
+  const groups: Group[] = []
+  if (editedResults.length > 0) {
+    const map = new Map<string, Group>()
+    editedResults.forEach((t, i) => {
+      const key = t.merchant.trim().toUpperCase().substring(0, 40)
+      if (!map.has(key)) map.set(key, { merchant: t.merchant, category: t.category || 'Otros', count: 0, totalExpense: 0, totalIncome: 0, indices: [] })
+      const g = map.get(key)!
+      g.count++
+      g.indices.push(i)
+      if (t.type === 'income') g.totalIncome += t.amount
+      else g.totalExpense += t.amount
+    })
+    map.forEach(g => groups.push(g))
+    groups.sort((a, b) => b.count - a.count)
+  }
+
+  function updateGroupCategory(indices: number[], cat: string) {
+    setEditedResults(prev => prev.map((t, i) => indices.includes(i) ? { ...t, category: cat } : t))
+  }
 
   function updateQueue(i: number, patch: Partial<QueueItem>) {
     setQueue(prev => prev.map((q, idx) => idx === i ? { ...q, ...patch } : q))
@@ -227,31 +250,66 @@ export default function ImportarPage() {
         <div className="bg-white/5 rounded-2xl border border-white/5 overflow-hidden">
           <div className="flex items-center justify-between p-4 border-b border-white/5">
             <div>
-              <p className="text-white font-medium">{editedResults.length} transacciones encontradas</p>
-              <p className="text-slate-500 text-xs">Revisa y ajusta las categorías antes de guardar</p>
+              <p className="text-white font-medium">{editedResults.length} transacciones · {groups.length} comercios</p>
+              <p className="text-slate-500 text-xs">Ajusta la categoría por grupo y guarda todo de una vez</p>
             </div>
-            <button onClick={saveAll} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-              <Plus size={14} /> Guardar todas
-            </button>
-          </div>
-          <div className="divide-y divide-white/5">
-            {editedResults.map((t, i) => (
-              <div key={i} className="flex items-center justify-between p-4 gap-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-white text-sm font-medium truncate">{t.merchant || t.description}</p>
-                  <p className="text-slate-500 text-xs">{t.date} · {t.payment_method}</p>
-                </div>
-                <select value={t.category || 'Otros'} onChange={e => updateCategory(i, e.target.value)}
-                  className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none flex-shrink-0">
-                  {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-                <span className={`text-sm font-semibold flex-shrink-0 ${t.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {t.type === 'income' ? '+' : '-'}RD$ {t.amount.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                </span>
-                <button onClick={() => removeRow(i)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={14} /></button>
+            <div className="flex items-center gap-2">
+              <div className="flex bg-white/5 rounded-lg p-0.5">
+                <button onClick={() => setViewMode('grouped')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-colors ${viewMode === 'grouped' ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>
+                  <Layers size={12} /> Grupos
+                </button>
+                <button onClick={() => setViewMode('list')} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-colors ${viewMode === 'list' ? 'bg-white/10 text-white' : 'text-slate-500 hover:text-slate-300'}`}>
+                  <List size={12} /> Lista
+                </button>
               </div>
-            ))}
+              <button onClick={saveAll} className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                <Plus size={14} /> Guardar todas
+              </button>
+            </div>
           </div>
+
+          {viewMode === 'grouped' ? (
+            <div className="divide-y divide-white/5">
+              {groups.map((g, gi) => (
+                <div key={gi} className="flex items-center gap-3 px-4 py-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white text-sm font-medium truncate">{g.merchant}</p>
+                    <p className="text-slate-500 text-xs">
+                      {g.count} transacción{g.count !== 1 ? 'es' : ''}
+                      {g.totalExpense > 0 && <span className="text-red-400 ml-2">-RD$ {g.totalExpense.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</span>}
+                      {g.totalIncome > 0 && <span className="text-emerald-400 ml-2">+RD$ {g.totalIncome.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</span>}
+                    </p>
+                  </div>
+                  <select
+                    value={g.category}
+                    onChange={e => { updateGroupCategory(g.indices, e.target.value); g.category = e.target.value }}
+                    className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none flex-shrink-0"
+                  >
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="divide-y divide-white/5 max-h-[600px] overflow-y-auto">
+              {editedResults.map((t, i) => (
+                <div key={i} className="flex items-center justify-between px-4 py-2.5 gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white text-sm truncate">{t.merchant || t.description}</p>
+                    <p className="text-slate-500 text-xs">{t.date} · {t.payment_method}</p>
+                  </div>
+                  <select value={t.category || 'Otros'} onChange={e => updateCategory(i, e.target.value)}
+                    className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-slate-300 focus:outline-none flex-shrink-0">
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <span className={`text-sm font-semibold flex-shrink-0 w-28 text-right ${t.type === 'income' ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {t.type === 'income' ? '+' : '-'}RD$ {t.amount.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                  </span>
+                  <button onClick={() => removeRow(i)} className="text-slate-600 hover:text-red-400 flex-shrink-0"><X size={14} /></button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
