@@ -7,7 +7,7 @@ export const maxDuration = 30
 const prompt = `Eres un asistente financiero experto en estados de cuenta dominicanos.
 Analiza el siguiente texto de un estado de cuenta y extrae TODAS las transacciones.
 
-Para cada transacción devuelve un JSON array con este formato exacto:
+Devuelve un JSON array con este formato exacto (sin texto adicional):
 [
   {
     "date": "YYYY-MM-DD",
@@ -24,13 +24,28 @@ Categorías: Comida, Transporte, Entretenimiento, Salud, Ropa, Educación, Servi
 - montos siempre positivos
 - type "income" para depósitos/créditos/nómina, "expense" para débitos/pagos
 - payment_method: "card", "cash" o "transfer"
-Responde SOLO con el JSON array, sin texto adicional.`
+Responde SOLO con el JSON array.`
 
-async function extractTextFromPdf(buffer: Buffer): Promise<string> {
-  // Dynamically import pdf-parse to avoid edge runtime issues
-  const pdfParse = (await import('pdf-parse')).default
-  const data = await pdfParse(buffer)
-  return data.text
+// Simple PDF text extractor using raw buffer parsing (no external deps)
+function extractTextFromPdfBuffer(buffer: Buffer): string {
+  const text = buffer.toString('latin1')
+  const chunks: string[] = []
+  // Extract text between BT and ET markers (PDF text objects)
+  const btEtRegex = /BT([\s\S]*?)ET/g
+  let match
+  while ((match = btEtRegex.exec(text)) !== null) {
+    const block = match[1]
+    // Extract strings inside parentheses: (text)Tj or (text)TJ
+    const strRegex = /\(([^)]*)\)\s*T[jJ]/g
+    let strMatch
+    while ((strMatch = strRegex.exec(block)) !== null) {
+      const decoded = strMatch[1]
+        .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+        .replace(/\\\\/g, '\\').replace(/\\\(/g, '(').replace(/\\\)/g, ')')
+      if (decoded.trim()) chunks.push(decoded)
+    }
+  }
+  return chunks.join(' ')
 }
 
 export async function POST(req: NextRequest) {
@@ -51,46 +66,31 @@ export async function POST(req: NextRequest) {
       else if (name.endsWith('.webp')) mediaType = 'image/webp'
     }
 
-    let messages: Parameters<typeof generateText>[0]['messages']
+    let messageContent: Parameters<typeof generateText>[0]['messages'][0]['content']
 
     if (mediaType === 'application/pdf') {
-      // Extract text first — uses text quota (much higher limits)
-      try {
-        const pdfText = await extractTextFromPdf(buffer)
-        if (pdfText && pdfText.trim().length > 100) {
-          messages = [{
-            role: 'user',
-            content: `${prompt}\n\nTEXTO DEL ESTADO DE CUENTA:\n${pdfText.substring(0, 15000)}`
-          }]
-        } else {
-          throw new Error('PDF has no extractable text, falling back to vision')
-        }
-      } catch {
-        // Fallback to vision for scanned PDFs
-        const base64 = buffer.toString('base64')
-        messages = [{
-          role: 'user',
-          content: [
-            { type: 'file', data: base64, mediaType: 'application/pdf' },
-            { type: 'text', text: prompt },
-          ],
-        }]
+      const pdfText = extractTextFromPdfBuffer(buffer)
+      if (pdfText.trim().length > 100) {
+        // Use text API — much higher free tier limits
+        messageContent = `${prompt}\n\nTEXTO DEL ESTADO DE CUENTA:\n${pdfText.substring(0, 20000)}`
+      } else {
+        // Scanned PDF — fall back to vision
+        messageContent = [
+          { type: 'file' as const, data: buffer.toString('base64'), mediaType: 'application/pdf' },
+          { type: 'text' as const, text: prompt },
+        ]
       }
     } else {
-      // Images — use vision
-      const base64 = buffer.toString('base64')
-      messages = [{
-        role: 'user',
-        content: [
-          { type: 'file', data: base64, mediaType: mediaType },
-          { type: 'text', text: prompt },
-        ],
-      }]
+      // Image file — use vision
+      messageContent = [
+        { type: 'file' as const, data: buffer.toString('base64'), mediaType: mediaType },
+        { type: 'text' as const, text: prompt },
+      ]
     }
 
     const { text } = await generateText({
       model: google('gemini-2.0-flash'),
-      messages,
+      messages: [{ role: 'user', content: messageContent }],
     })
 
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
