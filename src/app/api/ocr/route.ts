@@ -30,12 +30,14 @@ Responde SOLO con el JSON array.`
 function extractTextFromPdfBuffer(buffer: Buffer): string {
   const text = buffer.toString('latin1')
   const chunks: string[] = []
+
   // Extract text between BT and ET markers (PDF text objects)
   const btEtRegex = /BT([\s\S]*?)ET/g
   let match
   while ((match = btEtRegex.exec(text)) !== null) {
     const block = match[1]
-    // Extract strings inside parentheses: (text)Tj or (text)TJ
+
+    // Format 1: (string)Tj or (string)TJ — literal strings
     const strRegex = /\(([^)]*)\)\s*T[jJ]/g
     let strMatch
     while ((strMatch = strRegex.exec(block)) !== null) {
@@ -44,7 +46,55 @@ function extractTextFromPdfBuffer(buffer: Buffer): string {
         .replace(/\\\\/g, '\\').replace(/\\\(/g, '(').replace(/\\\)/g, ')')
       if (decoded.trim()) chunks.push(decoded)
     }
+
+    // Format 2: <hex>Tj or <hex>TJ — hex-encoded strings (common in bank PDFs)
+    const hexRegex = /<([0-9a-fA-F]+)>\s*T[jJ]/g
+    let hexMatch
+    while ((hexMatch = hexRegex.exec(block)) !== null) {
+      const hex = hexMatch[1]
+      let decoded = ''
+      for (let i = 0; i < hex.length - 1; i += 2) {
+        const code = parseInt(hex.substring(i, i + 2), 16)
+        if (code > 31 && code < 127) decoded += String.fromCharCode(code)
+        else if (code >= 160) decoded += String.fromCharCode(code) // latin-1 extended
+      }
+      if (decoded.trim()) chunks.push(decoded)
+    }
+
+    // Format 3: [(string1)(string2)...]TJ — array of strings
+    const arrayRegex = /\[([^\]]*)\]\s*TJ/g
+    let arrayMatch
+    while ((arrayMatch = arrayRegex.exec(block)) !== null) {
+      const inner = arrayMatch[1]
+      const parts: string[] = []
+      const partRegex = /\(([^)]*)\)/g
+      let part
+      while ((part = partRegex.exec(inner)) !== null) {
+        const decoded = part[1]
+          .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+          .replace(/\\\\/g, '\\').replace(/\\\(/g, '(').replace(/\\\)/g, ')')
+        if (decoded.trim()) parts.push(decoded)
+      }
+      if (parts.length) chunks.push(parts.join(''))
+    }
   }
+
+  // Also try to extract raw text streams (some PDFs use compressed streams but the decoded text may be visible)
+  // Look for stream content between stream/endstream
+  const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g
+  let streamMatch
+  while ((streamMatch = streamRegex.exec(text)) !== null) {
+    const content = streamMatch[1]
+    // Only process uncompressed streams (no /Filter FlateDecode etc.)
+    if (!content.includes('\x78\x9c') && !content.includes('\x78\x01')) {
+      // Look for readable text patterns like dates and amounts (e.g. "01/05/2024")
+      const readable = content.replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ')
+      if (readable.match(/\d{2}[\/\-]\d{2}[\/\-]\d{4}/)) {
+        chunks.push(readable)
+      }
+    }
+  }
+
   return chunks.join(' ')
 }
 
