@@ -54,39 +54,44 @@ export default function ImportarPage() {
       for (let j = i + 1; j < files.length; j++) updateQueue(j, { status: 'pending' })
 
       let success = false
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         const form = new FormData(); form.append('file', files[i])
         try {
           const res = await fetch('/api/ocr', { method: 'POST', body: form })
           const data = await res.json()
           if (data.transactions) {
             allTx.push(...data.transactions)
-            updateQueue(i, { status: 'done', message: `${data.transactions.length} transacciones` })
+            updateQueue(i, { status: 'done', message: `${data.transactions.length} transacciones encontradas` })
             success = true
             break
-          } else if (data.error?.toLowerCase().includes('quota') || data.error?.toLowerCase().includes('rate')) {
-            // Rate limit — wait 65s
+          } else if (res.status === 429 || data.quota) {
+            // Rate limit hit — wait 65s on client side then retry
             const retryTime = Date.now() + 65000
             setRetryAt(retryTime)
-            updateQueue(i, { status: 'waiting', message: 'Límite de cuota — reintentando en 65s...' })
+            updateQueue(i, { status: 'waiting', message: 'Límite de API alcanzado, reintentando automáticamente...' })
             await new Promise(r => setTimeout(r, 65000))
             setRetryAt(0)
-            updateQueue(i, { status: 'processing' })
+            updateQueue(i, { status: 'processing', message: undefined })
           } else {
-            updateQueue(i, { status: 'error', message: data.error || 'Sin transacciones' })
+            updateQueue(i, { status: 'error', message: data.error || 'Sin transacciones detectadas' })
             errs.push(`${files[i].name}: ${data.error || 'Sin transacciones'}`)
             break
           }
         } catch {
-          updateQueue(i, { status: 'error', message: 'Error de conexión' })
-          errs.push(`${files[i].name}: Error de conexión`)
-          break
+          if (attempt < 2) {
+            // Network error, wait 5s and retry
+            await new Promise(r => setTimeout(r, 5000))
+            updateQueue(i, { status: 'processing', message: undefined })
+          } else {
+            updateQueue(i, { status: 'error', message: 'Error de conexión' })
+            errs.push(`${files[i].name}: Error de conexión`)
+          }
         }
       }
 
       if (!success && !errs.find(e => e.startsWith(files[i].name))) {
-        updateQueue(i, { status: 'error', message: 'Falló después de reintentar' })
-        errs.push(`${files[i].name}: Falló después de reintentar`)
+        updateQueue(i, { status: 'error', message: 'Falló después de 3 intentos' })
+        errs.push(`${files[i].name}: Falló después de 3 intentos`)
       }
 
       // Pause 4s between files
