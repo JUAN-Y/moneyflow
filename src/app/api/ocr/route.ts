@@ -93,69 +93,84 @@ function guessCategory(desc: string): string {
   return 'Otros'
 }
 
-function parseTransactionsFromText(rawText: string): Tx[] {
-  const transactions: Tx[] = []
-  const lines = rawText.split(/[\n\r]+/).map(l => l.trim()).filter(l => l.length > 5)
+function parseTxSegment(dateStr: string, segment: string): Tx | null {
+  // segment: "DESCRIPTION -AMOUNT BALANCE" or "DESCRIPTION AMOUNT BALANCE"
+  // The last one or two numbers are balance/amount, we want the FIRST signed amount
+  const s = segment.trim()
+  // Match: description then signed amount (with optional balance after)
+  // e.g. "COBRO IMP DGII 0.15%_TRANS TUB -1.80 44,975.57"
+  // e.g. "TRANSFERENCIA DE JEAN CARLOS GOMEZ PAULINO 12,500.00 0.00"
+  const m = s.match(/^(.+?)\s+(-?[\d,]+\.\d{2})(?:\s+-?[\d,]+\.\d{2})*$/)
+  if (!m) return null
 
-  // Pattern for Banreservas/Banco Popular/BHD format:
-  // DD/MM/YYYY  DESCRIPTION  [-]AMOUNT  [BALANCE]
-  // Amount can be negative (expense) or positive (income)
-  // Balance is optional trailing number
-  const txLine = /^(\d{2})[\/\-](\d{2})[\/\-](\d{2,4})\s+(.+?)\s+(-?[\d,]+\.\d{2})(?:\s+[\d,]+\.\d{2})?$/
+  const rawDesc = m[1].trim()
+  // Skip pure header tokens
+  if (/^(fecha|balance|saldo|debito|credito|referencia)$/i.test(rawDesc)) return null
+  if (rawDesc.length < 2) return null
 
-  for (const line of lines) {
-    // Skip header lines
-    if (/^(fecha|date|descripci|monto|amount|balance|saldo|referencia|movimiento)/i.test(line)) continue
+  const amountNum = parseFloat(m[2].replace(/,/g, ''))
+  if (isNaN(amountNum) || amountNum === 0) return null
 
-    const m = line.match(txLine)
-    if (!m) continue
+  const isNegative = amountNum < 0
+  const amount = Math.abs(amountNum)
 
-    const rawDesc = m[4].trim()
-    const rawAmount = m[5]
-    const amountNum = parseFloat(rawAmount.replace(/,/g, ''))
-    if (isNaN(amountNum) || amountNum === 0) continue
-
-    const isNegative = amountNum < 0
-    const amount = Math.abs(amountNum)
-
-    // Determine income vs expense
-    // If amount is negative → expense
-    // If amount is positive → check description for income keywords
-    let isIncome: boolean
-    if (isNegative) {
-      isIncome = false
-    } else {
-      const descLower = rawDesc.toLowerCase()
-      isIncome = INCOME_KEYWORDS.some(k => descLower.includes(k))
-      // If no income keyword and it's positive, still mark as income
-      if (!isIncome) {
-        // Positive amounts that aren't clearly income get marked as income if they look like transfers received
-        isIncome = /^(transferencia de|cr |desembolso|avance credimas|pago int|interes)/i.test(rawDesc)
-        if (!isIncome) isIncome = true // default positive = income
-      }
-    }
-
-    // Determine payment method
-    let paymentMethod = 'card'
+  // Income detection: positive amount + income keywords
+  let isIncome: boolean
+  if (isNegative) {
+    isIncome = false
+  } else {
     const dl = rawDesc.toLowerCase()
-    if (/retiro atm|retiro tuefectivo/.test(dl)) paymentMethod = 'cash'
-    else if (/transferencia|pago tarjeta|cargo balance|cargo mensual/.test(dl)) paymentMethod = 'transfer'
-
-    const year = m[3].length === 2 ? `20${m[3]}` : m[3]
-    const date = `${year}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`
-
-    transactions.push({
-      date,
-      amount,
-      type: isIncome ? 'income' : 'expense',
-      merchant: rawDesc.substring(0, 60),
-      description: rawDesc,
-      payment_method: paymentMethod,
-      category: guessCategory(rawDesc),
-    })
+    isIncome = INCOME_KEYWORDS.some(k => dl.includes(k)) ||
+      /^(transferencia de |cr |desembolso|avance credimas|pago int|interes)/i.test(rawDesc)
+    if (!isIncome) isIncome = true // positive default = income
   }
 
-  // If no full-line matches, try the sliding-window approach on tokens
+  // Parse date parts from "DD/MM/YYYY"
+  const dp = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/)
+  if (!dp) return null
+  const year = dp[3].length === 2 ? `20${dp[3]}` : dp[3]
+  const date = `${year}-${dp[2].padStart(2, '0')}-${dp[1].padStart(2, '0')}`
+
+  const dl = rawDesc.toLowerCase()
+  let paymentMethod = 'card'
+  if (/retiro atm|retiro tuefectivo/.test(dl)) paymentMethod = 'cash'
+  else if (/transferencia|pago tarjeta|cargo balance|cargo mensual/.test(dl)) paymentMethod = 'transfer'
+
+  return {
+    date, amount,
+    type: isIncome ? 'income' : 'expense',
+    merchant: rawDesc.substring(0, 60),
+    description: rawDesc,
+    payment_method: paymentMethod,
+    category: guessCategory(rawDesc),
+  }
+}
+
+function parseTransactionsFromText(rawText: string): Tx[] {
+  const transactions: Tx[] = []
+
+  // The PDF streams are long continuous strings. Split by date pattern to get segments.
+  // Each segment: "DD/MM/YYYY REST_OF_TRANSACTION"
+  const datePattern = /\b(\d{2}[\/\-]\d{2}[\/\-]\d{2,4})\b/g
+
+  // Find all date positions
+  const matches: { date: string; index: number }[] = []
+  let m
+  while ((m = datePattern.exec(rawText)) !== null) {
+    matches.push({ date: m[1], index: m.index })
+  }
+
+  for (let i = 0; i < matches.length; i++) {
+    const { date, index } = matches[i]
+    const nextIndex = i + 1 < matches.length ? matches[i + 1].index : rawText.length
+    // Segment is everything between this date and the next date (minus the date itself)
+    const segment = rawText.slice(index + date.length, nextIndex).trim()
+    if (!segment) continue
+    const tx = parseTxSegment(date, segment)
+    if (tx) transactions.push(tx)
+  }
+
+  // If no matches, try the sliding-window approach on tokens
   if (transactions.length === 0) {
     transactions.push(...parseTokenBased(rawText))
   }
