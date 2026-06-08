@@ -9,7 +9,7 @@ const titles: Record<string, string> = {
   '/dashboard': 'Dashboard', '/cuentas': 'Cuentas', '/ingresos': 'Ingresos',
   '/gastos': 'Gastos', '/prestamos': 'Préstamos', '/deudas': 'Deudas',
   '/presupuesto': 'Presupuesto', '/metas': 'Metas', '/historial': 'Historial',
-  '/moneyflow-ai': 'MoneyFlow AI', '/ajustes': 'Ajustes',
+  '/importar': 'Importar', '/moneyflow-ai': 'MoneyFlow AI', '/ajustes': 'Ajustes',
 }
 
 const PAGES = [
@@ -17,7 +17,8 @@ const PAGES = [
   { label: 'Ingresos', href: '/ingresos' }, { label: 'Gastos', href: '/gastos' },
   { label: 'Préstamos', href: '/prestamos' }, { label: 'Deudas', href: '/deudas' },
   { label: 'Presupuesto', href: '/presupuesto' }, { label: 'Metas', href: '/metas' },
-  { label: 'Historial', href: '/historial' }, { label: 'MoneyFlow AI', href: '/moneyflow-ai' },
+  { label: 'Historial', href: '/historial' }, { label: 'Importar', href: '/importar' },
+  { label: 'MoneyFlow AI', href: '/moneyflow-ai' },
 ]
 
 export default function Topbar() {
