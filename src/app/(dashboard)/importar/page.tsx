@@ -16,18 +16,24 @@ export default function ImportarPage() {
   const [editedResults, setEditedResults] = useState<OcrTx[]>([])
   const supabase = createClient()
 
-  async function processFile(file: File) {
+  const [progress, setProgress] = useState({ current: 0, total: 0 })
+
+  async function processFiles(files: File[]) {
     setLoading(true); setOcrResults([]); setSaved(false)
-    const form = new FormData(); form.append('file', file)
-    try {
-      const res = await fetch('/api/ocr', { method: 'POST', body: form })
-      const data = await res.json()
-      if (data.transactions) {
-        setOcrResults(data.transactions)
-        setEditedResults(data.transactions)
-      }
-    } catch { alert('Error procesando el archivo. Intenta de nuevo.') }
-    finally { setLoading(false) }
+    setProgress({ current: 0, total: files.length })
+    const allTx: OcrTx[] = []
+    for (let i = 0; i < files.length; i++) {
+      setProgress({ current: i + 1, total: files.length })
+      const form = new FormData(); form.append('file', files[i])
+      try {
+        const res = await fetch('/api/ocr', { method: 'POST', body: form })
+        const data = await res.json()
+        if (data.transactions) allTx.push(...data.transactions)
+      } catch { /* skip failed file */ }
+    }
+    setOcrResults(allTx)
+    setEditedResults(allTx)
+    setLoading(false)
   }
 
   function updateCategory(i: number, cat: string) {
@@ -64,7 +70,7 @@ export default function ImportarPage() {
 
       {/* Drop zone */}
       <div
-        onDrop={e => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files[0]; if (f) processFile(f) }}
+        onDrop={e => { e.preventDefault(); setDragOver(false); const files = Array.from(e.dataTransfer.files); if (files.length) processFiles(files) }}
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
         className={`border-2 border-dashed rounded-2xl p-12 text-center transition-all ${dragOver ? 'border-emerald-400 bg-emerald-500/5' : 'border-white/10 hover:border-white/20'}`}
@@ -73,12 +79,12 @@ export default function ImportarPage() {
           <FileText size={36} className="text-slate-500" />
           <Image size={36} className="text-slate-500" />
         </div>
-        <p className="text-white font-medium mb-1">Arrastra tu estado de cuenta aquí</p>
+        <p className="text-white font-medium mb-1">Arrastra tus estados de cuenta aquí</p>
         <p className="text-slate-500 text-sm mb-2">Banco Popular, BHD, Banreservas, Scotiabank...</p>
-        <p className="text-slate-600 text-xs mb-5">PDF o imagen (JPG, PNG, WEBP)</p>
+        <p className="text-slate-600 text-xs mb-5">Puedes subir hasta 10 archivos a la vez · PDF o imagen (JPG, PNG, WEBP)</p>
         <label className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2.5 rounded-xl text-sm cursor-pointer transition-colors font-medium">
-          <Upload size={16} /> Seleccionar archivo
-          <input type="file" accept="image/*,.pdf" className="hidden" onChange={e => e.target.files?.[0] && processFile(e.target.files[0])} />
+          <Upload size={16} /> Seleccionar archivos
+          <input type="file" accept="image/*,.pdf" multiple className="hidden" onChange={e => { const files = Array.from(e.target.files || []); if (files.length) processFiles(files) }} />
         </label>
       </div>
 
@@ -86,7 +92,10 @@ export default function ImportarPage() {
         <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-6 text-center">
           <div className="w-8 h-8 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
           <p className="text-emerald-400 font-medium">IA analizando movimientos...</p>
-          <p className="text-slate-500 text-sm mt-1">Esto puede tomar unos segundos</p>
+          {progress.total > 1 && (
+            <p className="text-slate-400 text-sm mt-1">Archivo {progress.current} de {progress.total}</p>
+          )}
+          <p className="text-slate-500 text-sm mt-1">Esto puede tomar unos segundos por archivo</p>
         </div>
       )}
 
