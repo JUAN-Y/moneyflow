@@ -49,7 +49,7 @@ Reglas:
 - Responde SOLO con el JSON array, sin texto adicional ni bloques de código`
 
     const { text } = await generateText({
-      model: google('gemini-2.0-flash'),
+      model: google('gemini-1.5-flash'),
       messages: [{
         role: 'user',
         content: [

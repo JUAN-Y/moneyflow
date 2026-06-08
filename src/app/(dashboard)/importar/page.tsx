@@ -26,6 +26,8 @@ export default function ImportarPage() {
     const errs: string[] = []
     for (let i = 0; i < files.length; i++) {
       setProgress({ current: i + 1, total: files.length })
+      // Small delay between files to avoid rate limiting
+      if (i > 0) await new Promise(r => setTimeout(r, 3000))
       const form = new FormData(); form.append('file', files[i])
       try {
         const res = await fetch('/api/ocr', { method: 'POST', body: form })
